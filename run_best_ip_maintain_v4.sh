@@ -26,6 +26,11 @@ MAX_ROUNDS="${MAX_ROUNDS:-5}"
 MAX_CANDIDATES="${MAX_CANDIDATES:-48}"
 AGGRESSIVE_SCAN="${AGGRESSIVE_SCAN:-1}"
 CANDIDATE_NEIGHBORS="${CANDIDATE_NEIGHBORS:-1}"
+QUICK_PROBE="${QUICK_PROBE:-1}"
+QUICK_DOWNLOAD_BYTES="${QUICK_DOWNLOAD_BYTES:-800000}"
+QUICK_PARALLEL_DOWNLOADS="${QUICK_PARALLEL_DOWNLOADS:-4}"
+QUICK_CURL_TIME_LIMIT="${QUICK_CURL_TIME_LIMIT:-6}"
+FULL_CANDIDATES="${FULL_CANDIDATES:-16}"
 CURL_TIME_LIMIT="${CURL_TIME_LIMIT:-12}"
 CONNECT_TIMEOUT="${CONNECT_TIMEOUT:-6}"
 PER_REQUEST_SLEEP="${PER_REQUEST_SLEEP:-3}"
@@ -38,6 +43,7 @@ CFST_THREADS="${CFST_THREADS:-120}"
 CFST_TESTS="${CFST_TESTS:-4}"
 CFST_DOWNLOADS="${CFST_DOWNLOADS:-20}"
 WORKER_URL="${WORKER_URL:-https://cfip.i3.pub}"
+FORCE_PARALLEL="${FORCE_PARALLEL:-0}"
 
 case "$OPERATOR" in
   CMCC|CTCC|CUCC) ;;
@@ -45,6 +51,9 @@ case "$OPERATOR" in
 esac
 if [[ "$AGGRESSIVE_SCAN" == "1" && "$MAX_CANDIDATES" -lt 48 ]]; then
   MAX_CANDIDATES=48
+fi
+if [[ "$FORCE_PARALLEL" != "1" && "$OPERATOR" == "CMCC" && "$PARALLEL_DOWNLOADS" -gt 12 ]]; then
+  PARALLEL_DOWNLOADS=12
 fi
 
 if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
@@ -222,13 +231,16 @@ if diag.exists():
         for r in csv.DictReader(f):
             try:
                 ip = r["ip"]
+                round_name = str(r.get("round", ""))
+                if round_name.endswith(".quick"):
+                    continue
                 lat = float(r.get("latency_ms", "999") or 999)
                 speed = float(r.get("speed_MB_s", "0") or 0)
                 http = int(float(r.get("http_code", "0") or 0))
                 bytes_downloaded = int(float(r.get("bytes_downloaded", "0") or 0))
             except Exception:
                 continue
-            force_overwrite = str(r.get("round", "")).lower() == "health"
+            force_overwrite = round_name.lower() == "health" or round_name.endswith(".full")
             valid = http in (200, 206) and bytes_downloaded > 0 and speed > 0
             if lat <= sla_latency and speed >= sla_speed:
                 level = "sla_pass"
@@ -486,9 +498,13 @@ PY
 test_candidates() {
   local candidate_file="$1"
   local round="$2"
+  local download_bytes="${3:-$DOWNLOAD_BYTES}"
+  local parallel_downloads="${4:-$PARALLEL_DOWNLOADS}"
+  local curl_time_limit="${5:-$CURL_TIME_LIMIT}"
+  local per_request_sleep="${6:-$PER_REQUEST_SLEEP}"
   while IFS=, read -r ip latency old_speed source; do
     [[ -n "${ip:-}" ]] || continue
-    python3 - "$DIAG_FILE" "$OPERATOR" "$round" "$ip" "$latency" "$old_speed" "$source" "$DOWNLOAD_BYTES" "$PARALLEL_DOWNLOADS" "$CONNECT_TIMEOUT" "$CURL_TIME_LIMIT" <<'PY'
+    python3 - "$DIAG_FILE" "$OPERATOR" "$round" "$ip" "$latency" "$old_speed" "$source" "$download_bytes" "$parallel_downloads" "$CONNECT_TIMEOUT" "$curl_time_limit" <<'PY'
 import concurrent.futures, csv, random, subprocess, sys, time
 
 diag, op, round_id, ip, latency, old_speed, source, download_bytes, parallel, connect_timeout, curl_time_limit = sys.argv[1:]
@@ -545,8 +561,41 @@ with open(diag, "a", encoding="utf-8", newline="") as f:
     csv.writer(f).writerow([op, round_id, ip, f"{measured_latency:.2f}", source, sample_url, http, total_bytes, f"{elapsed:.3f}", f"{speed:.2f}", error])
 print(f"round={round_id} ip={ip} latency={measured_latency:.2f} old_speed={old_speed} source={source} http={http} bytes={total_bytes} speed={speed:.2f}MB/s {error}")
 PY
-    sleep "$PER_REQUEST_SLEEP"
+    sleep "$per_request_sleep"
   done < "$candidate_file"
+}
+
+make_full_candidates_from_quick() {
+  local quick_round="$1"
+  local output_file="$2"
+  python3 - "$DIAG_FILE" "$quick_round" "$FULL_CANDIDATES" > "$output_file" <<'PY'
+import csv, sys
+
+diag, quick_round, limit = sys.argv[1], sys.argv[2], int(sys.argv[3])
+rows = []
+try:
+    with open(diag, encoding="utf-8") as f:
+        for r in csv.DictReader(f):
+            if r.get("round") != quick_round:
+                continue
+            try:
+                http = int(float(r.get("http_code") or 0))
+                bytes_downloaded = int(float(r.get("bytes_downloaded") or 0))
+                speed = float(r.get("speed_MB_s") or 0)
+                lat = float(r.get("latency_ms") or 999)
+            except Exception:
+                continue
+            if http not in (200, 206) or bytes_downloaded <= 0 or speed <= 0:
+                continue
+            score = speed * 1000 - lat * 8
+            rows.append((score, lat, speed, r))
+except FileNotFoundError:
+    pass
+
+rows.sort(key=lambda item: (-item[0], item[1]))
+for _, lat, speed, r in rows[:limit]:
+    print(f"{r.get('ip')},{lat:.2f},{speed:.2f},{r.get('candidate_source') or 'quick'}")
+PY
 }
 
 run_cfst_replenish() {
@@ -564,7 +613,7 @@ run_cfst_replenish() {
 
 {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] v4 SLA maintainer started"
-  echo "operator=${OPERATOR} sla_latency_ms=${SLA_LATENCY_MS} sla_speed_MB_s=${SLA_SPEED_MB} required=${REQUIRED_COUNT} max_rounds=${MAX_ROUNDS} max_candidates=${MAX_CANDIDATES} aggressive=${AGGRESSIVE_SCAN} neighbors=${CANDIDATE_NEIGHBORS} parallel_downloads=${PARALLEL_DOWNLOADS} health_check=${HEALTH_CHECK}"
+  echo "operator=${OPERATOR} sla_latency_ms=${SLA_LATENCY_MS} sla_speed_MB_s=${SLA_SPEED_MB} required=${REQUIRED_COUNT} max_rounds=${MAX_ROUNDS} max_candidates=${MAX_CANDIDATES} aggressive=${AGGRESSIVE_SCAN} neighbors=${CANDIDATE_NEIGHBORS} quick=${QUICK_PROBE} quick_parallel=${QUICK_PARALLEL_DOWNLOADS} full_candidates=${FULL_CANDIDATES} parallel_downloads=${PARALLEL_DOWNLOADS} health_check=${HEALTH_CHECK}"
   [[ -n "${CAFFEINATE_PID:-}" ]] && echo "caffeinate_pid=${CAFFEINATE_PID}"
   sync_remote_best
   sync_cf_ipv4
@@ -612,7 +661,25 @@ run_cfst_replenish() {
     fi
     echo "round=${round} candidates:"
     sed -n '1,80p' "$candidate_file"
-    test_candidates "$candidate_file" "$round"
+
+    if [[ "$QUICK_PROBE" == "1" ]]; then
+      quick_round="${round}.quick"
+      full_round="${round}.full"
+      echo "round=${round} quick_probe bytes=${QUICK_DOWNLOAD_BYTES} parallel=${QUICK_PARALLEL_DOWNLOADS} limit=${MAX_CANDIDATES}"
+      test_candidates "$candidate_file" "$quick_round" "$QUICK_DOWNLOAD_BYTES" "$QUICK_PARALLEL_DOWNLOADS" "$QUICK_CURL_TIME_LIMIT" "0"
+      full_file="$(mktemp)"
+      make_full_candidates_from_quick "$quick_round" "$full_file"
+      if [[ -s "$full_file" ]]; then
+        echo "round=${round} full_candidates:"
+        sed -n '1,80p' "$full_file"
+        test_candidates "$full_file" "$full_round" "$DOWNLOAD_BYTES" "$PARALLEL_DOWNLOADS" "$CURL_TIME_LIMIT" "$PER_REQUEST_SLEEP"
+      else
+        echo "round=${round} quick_probe no usable candidates; skipping full probe"
+      fi
+      rm -f "$full_file"
+    else
+      test_candidates "$candidate_file" "$round"
+    fi
     rm -f "$candidate_file"
 
     append_history_from_diag
