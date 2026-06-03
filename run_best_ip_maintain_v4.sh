@@ -213,14 +213,15 @@ write_table(candidate_csv, candidate_chosen)
 write_txt(candidate_txt, candidate_chosen)
 
 published = False
-if len(chosen) >= required:
-    write_table(best_csv, chosen)
-    write_txt(best_txt, chosen)
+publish_rows = chosen if len(chosen) >= required else candidate_chosen
+if len(publish_rows) >= required:
+    write_table(best_csv, publish_rows)
+    write_txt(best_txt, publish_rows)
     published = True
 
 best_latency = min((r["_lat"] for r in candidate_chosen), default=math.nan)
 best_speed = max((r["_speed"] for r in candidate_chosen), default=math.nan)
-status = "pass" if published else "fail"
+status = "pass" if len(chosen) >= required else ("candidate_pass" if published else "fail")
 summary.write_text("\n".join([
     f"scan_finished_at={time.strftime('%Y-%m-%d %H:%M:%S')}",
     "scan_engine=curl_resolve_v4_sla_maintainer",
@@ -229,7 +230,7 @@ summary.write_text("\n".join([
     f"sla_speed_MB_s={sla_speed:g}",
     f"required_count={required}",
     f"sla_good_count={len(chosen)}",
-    f"best_count={len(chosen)}",
+    f"best_count={len(publish_rows) if published else 0}",
     f"candidate_count={len(candidate_chosen)}",
     f"sla_status={status}",
     f"target_speed_MB_s={target_speed:g}",
@@ -238,6 +239,8 @@ summary.write_text("\n".join([
     "published_files=best.csv,best.txt" if published else "published_files=not_updated; candidate_best.csv,candidate_best.txt only",
     "verdict=" + (
         f"v4 已发布 {required} 个 SLA 达标 IP（延迟 <= {sla_latency:g}ms，速度 >= {sla_speed:g} MB/s）。"
+        if len(chosen) >= required else
+        f"v4 已发布 {len(publish_rows)} 个本机 Top 候选；理想 SLA 命中 {len(chosen)}/{required}，交由 Worker 全网裁决。"
         if published else
         f"v4 当前只有 {len(chosen)}/{required} 个 SLA 达标 IP；已保留 {len(candidate_chosen)} 个本机候选供 Worker 统一裁决。"
     ),
