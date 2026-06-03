@@ -14,6 +14,7 @@ CANDIDATE_TXT="candidate_best.txt"
 SUMMARY_FILE="scan_summary.txt"
 CFST_LOG="cfst_replenish_v4.log"
 CFST_OUT="result_scan_v4.csv"
+REMOTE_BEST_TXT="remote_best.txt"
 
 OPERATOR="${OPERATOR:-CMCC}"
 SLA_SPEED_MB="${SLA_SPEED_MB:-20}"
@@ -33,6 +34,7 @@ CFST_REPLENISH="${CFST_REPLENISH:-1}"
 CFST_THREADS="${CFST_THREADS:-120}"
 CFST_TESTS="${CFST_TESTS:-4}"
 CFST_DOWNLOADS="${CFST_DOWNLOADS:-20}"
+WORKER_URL="${WORKER_URL:-https://cfip.i3.pub}"
 
 case "$OPERATOR" in
   CMCC|CTCC|CUCC) ;;
@@ -56,6 +58,16 @@ if command -v caffeinate >/dev/null 2>&1; then
   caffeinate -dims &
   CAFFEINATE_PID="$!"
 fi
+
+sync_remote_best() {
+  [[ -n "${WORKER_URL:-}" ]] || return 0
+  curl -fsSL --connect-timeout 5 --max-time 12 "${WORKER_URL%/}/best.txt" -o "${REMOTE_BEST_TXT}.tmp" 2>/dev/null || return 0
+  if [[ -s "${REMOTE_BEST_TXT}.tmp" ]]; then
+    mv "${REMOTE_BEST_TXT}.tmp" "$REMOTE_BEST_TXT"
+  else
+    rm -f "${REMOTE_BEST_TXT}.tmp"
+  fi
+}
 
 publish_from_history() {
   python3 - "$OPERATOR" "$SLA_LATENCY_MS" "$SLA_SPEED_MB" "$REQUIRED_COUNT" "$TARGET_SPEED_MB" <<'PY'
@@ -303,6 +315,8 @@ def add(ip, lat, speed=0.0, source="", order=0):
     score += max(0, 1000 - lat * 10) + speed * 20
     if source == "history" and not (lat <= sla_latency and speed >= sla_speed):
         score -= 2500
+    if source == "remote_best":
+        score += 20000
     if source == "ip_seed":
         score += seed_bias(ip) - order * 0.001
     if old is None or score > old[2]:
@@ -328,6 +342,14 @@ if path.exists():
         for r in csv.DictReader(f):
             add(r.get("IP") or r.get("ip") or "", r.get("平均延迟(ms)") or r.get("latency_ms") or "999", r.get("下载速度(MB/s)") or r.get("download_speed_MB_s") or "0", "best")
 
+path = base / "remote_best.txt"
+if path.exists():
+    with path.open(encoding="utf-8") as f:
+        for line in f:
+            ip = line.strip()
+            if ip and not ip.startswith("#"):
+                add(ip, 1, sla_speed + 1, "remote_best")
+
 sla_ready = sum(1 for lat, speed, score, source in items.values() if lat <= sla_latency and speed >= sla_speed)
 if sla_ready < limit:
     path = base / "ip.txt"
@@ -346,11 +368,22 @@ if sla_ready < limit:
                 if net.version != 4 or net.num_addresses <= 2:
                     continue
                 usable = net.num_addresses - 2
-                offsets = [1, max(1, usable // 8), max(1, usable // 4), max(1, usable // 2), max(1, usable // 3), max(1, usable // 2), max(1, usable * 2 // 3), max(1, usable * 3 // 4), max(1, usable * 7 // 8), usable]
+                offsets = [
+                    max(2, usable // 7),
+                    max(2, usable // 5),
+                    max(2, usable // 3),
+                    max(2, usable // 2),
+                    max(2, usable * 2 // 3),
+                    max(2, usable * 4 // 5),
+                    max(2, usable * 6 // 7),
+                ]
                 for offset in offsets:
                     try:
                         ip = str(net.network_address + offset)
                     except Exception:
+                        continue
+                    last_octet = int(ip.rsplit(".", 1)[1])
+                    if last_octet < 2 or last_octet > 253:
                         continue
                     seed_order += 1
                     add(ip, 999, 0, "ip_seed", seed_order)
@@ -467,6 +500,8 @@ run_cfst_replenish() {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] v4 SLA maintainer started"
   echo "operator=${OPERATOR} sla_latency_ms=${SLA_LATENCY_MS} sla_speed_MB_s=${SLA_SPEED_MB} required=${REQUIRED_COUNT} max_rounds=${MAX_ROUNDS} parallel_downloads=${PARALLEL_DOWNLOADS} health_check=${HEALTH_CHECK}"
   [[ -n "${CAFFEINATE_PID:-}" ]] && echo "caffeinate_pid=${CAFFEINATE_PID}"
+  sync_remote_best
+  [[ -f "$REMOTE_BEST_TXT" ]] && echo "remote_best_count=$(grep -cve '^[[:space:]]*$' "$REMOTE_BEST_TXT" 2>/dev/null || echo 0)"
   echo "operator_profile,round,ip,latency_ms,candidate_source,url,http_code,bytes_downloaded,time_total,speed_MB_s,error" > "$DIAG_FILE"
   [[ -f "$HISTORY_FILE" ]] || echo "operator_profile,ip,latency_ms,download_speed_MB_s,packet_loss,colo,hit_level,speed_source,url,http_code,bytes_downloaded,score,last_seen" > "$HISTORY_FILE"
 
