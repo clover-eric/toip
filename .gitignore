@@ -1,0 +1,14 @@
+.env
+data/
+*.log
+*.pid
+*.tmp
+best.csv
+best.txt
+best_history.csv
+candidate_best.csv
+candidate_best.txt
+result_scan*.csv
+speed_diagnostics*.csv
+scan_summary.txt
+cfst

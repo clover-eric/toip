@@ -1,0 +1,18 @@
+services:
+  tocf-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: tocf-agent:local
+    container_name: tocf-agent
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      WORKER_URL: ${WORKER_URL:-https://cfip.i3.pub}
+      SOURCE: ${SOURCE:-local-cmcc}
+      OPERATOR: ${OPERATOR:-CMCC}
+    volumes:
+      - ./data:/data
