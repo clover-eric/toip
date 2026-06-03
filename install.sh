@@ -17,11 +17,11 @@ fetch_url() {
     [ -n "$url" ] || continue
     log "fetch $url"
     if need curl; then
-      if curl -L --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 -fsS "$url" -o "$output"; then
+      if curl -L --connect-timeout 6 --max-time 25 --retry 1 --retry-delay 1 -fsS "$url" -o "$output"; then
         return 0
       fi
     elif need wget; then
-      if wget -T 120 -O "$output" "$url"; then
+      if wget -T 25 -O "$output" "$url"; then
         return 0
       fi
     else
@@ -151,6 +151,7 @@ download_cfst() {
     "${CFST_TARBALL_URL:-}" \
     "https://gh-proxy.com/${url}" \
     "https://ghfast.top/${url}" \
+    "https://gh.llkk.cc/${url}" \
     "$url"
   as_root tar -xzf "$tmp" -C "$INSTALL_DIR" cfst
   as_root chmod +x "$INSTALL_DIR/cfst"
@@ -250,6 +251,7 @@ main() {
       "${TOIP_TARBALL_URL:-}" \
       "https://gh-proxy.com/${origin_tarball}" \
       "https://ghfast.top/${origin_tarball}" \
+      "https://gh.llkk.cc/${origin_tarball}" \
       "$origin_tarball"
     tar -xzf "$tarball" -C "$tmp_dir" --strip-components=1
     cd "$tmp_dir"
@@ -263,7 +265,7 @@ main() {
     install_docker || true
   fi
   if need opkg; then
-    install_pkg bash curl ca-bundle python3 coreutils procps
+    install_pkg bash curl ca-bundle python3 coreutils
   else
     install_pkg bash curl ca-certificates python3 coreutils procps-ng
   fi

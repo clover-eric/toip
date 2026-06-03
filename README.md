@@ -35,6 +35,8 @@ UPLOAD_TOKEN=ChangeMeUpload2026!
 
 安装脚本内部会自动尝试 `gh-proxy.com`、`ghfast.top` 和 GitHub 直连，源码包和 `cfst` 下载都会自动切换可用源。
 
+如果旧安装卡在 GitHub 下载，按 `Ctrl+C` 停掉后重跑国内加速命令即可。
+
 ## Docker
 
 ```sh
