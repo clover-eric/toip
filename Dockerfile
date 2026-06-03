@@ -33,6 +33,7 @@ ENV TOCF_WORKDIR=/data \
     OPERATOR=CMCC \
     SOURCE=local-cmcc \
     WORKER_URL=https://cfip.i3.pub \
+    UPLOAD_TOKEN=ChangeMeUpload2026! \
     SCAN_INTERVAL_SECONDS=7200 \
     HEALTH_CHECK=1 \
     CFST_REPLENISH=1 \

@@ -79,7 +79,7 @@ write_env() {
     return
   fi
   worker="${WORKER_URL:-}"
-  token="${UPLOAD_TOKEN:-}"
+  token="${UPLOAD_TOKEN:-ChangeMeUpload2026!}"
   source="${SOURCE:-$(hostname 2>/dev/null || echo router)}"
   operator="${OPERATOR:-}"
   if [ -z "$operator" ]; then

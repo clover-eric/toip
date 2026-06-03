@@ -8,11 +8,17 @@ Cloudflare 优选 IP 本地检测端。适配 OpenWrt、软路由、NAS、Linux�
 curl -fsSL https://raw.githubusercontent.com/clover-eric/toip/main/install.sh | sh
 ```
 
-带 Worker 参数：
+指定检测点运营商：
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/clover-eric/toip/main/install.sh | \
-  WORKER_URL=https://cfip.i3.pub UPLOAD_TOKEN=你的上传令牌 SOURCE=local-cmcc OPERATOR=CMCC sh
+SOURCE=local-cmcc OPERATOR=CMCC sh -c "$(curl -fsSL https://raw.githubusercontent.com/clover-eric/toip/main/install.sh)"
+```
+
+默认已经内置：
+
+```env
+WORKER_URL=https://cfip.i3.pub
+UPLOAD_TOKEN=ChangeMeUpload2026!
 ```
 
 ## Docker
@@ -59,7 +65,7 @@ Worker 最终只保留 30 个 IP：三大运营商各尽量 10 个，缺口用�
 
 ```env
 WORKER_URL=https://cfip.i3.pub
-UPLOAD_TOKEN=你的上传令牌
+UPLOAD_TOKEN=ChangeMeUpload2026!
 SOURCE=local-cmcc
 OPERATOR=CMCC
 SCAN_INTERVAL_SECONDS=7200
@@ -87,4 +93,3 @@ Docker：
 ```sh
 docker compose restart
 ```
-

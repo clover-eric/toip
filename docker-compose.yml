@@ -12,6 +12,7 @@ services:
         required: false
     environment:
       WORKER_URL: ${WORKER_URL:-https://cfip.i3.pub}
+      UPLOAD_TOKEN: ${UPLOAD_TOKEN:-ChangeMeUpload2026!}
       SOURCE: ${SOURCE:-local-cmcc}
       OPERATOR: ${OPERATOR:-CMCC}
     volumes:
