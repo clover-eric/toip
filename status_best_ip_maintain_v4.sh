@@ -25,5 +25,10 @@ done
 [[ -f scan_summary.txt ]] && { echo; echo "summary:"; cat scan_summary.txt; }
 [[ -f best.csv ]] && { echo; echo "best_preview:"; head -n 12 best.csv; }
 [[ -f candidate_best.csv ]] && { echo; echo "candidate_preview:"; head -n 12 candidate_best.csv; }
+if [[ ! -f result_scan_v4.csv ]] && [[ -f cfst_replenish_v4.log ]]; then
+  echo
+  echo "cfst_note:"
+  echo "result_scan_v4.csv not found; agent will use built-in ip.txt seed fallback on the latest version."
+fi
 [[ -f scan_v4.log ]] && { echo; echo "log_tail:"; tail -n 80 scan_v4.log; }
 exit 0

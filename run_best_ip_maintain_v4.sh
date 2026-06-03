@@ -262,7 +262,7 @@ PY
 
 make_candidates() {
   python3 - "$OPERATOR" "$SLA_LATENCY_MS" "$SLA_SPEED_MB" "$MAX_CANDIDATES" > "$1" <<'PY'
-import csv, pathlib, sys
+import csv, ipaddress, pathlib, sys
 
 op = sys.argv[1]
 sla_latency = float(sys.argv[2])
@@ -311,6 +311,30 @@ if path.exists():
     with path.open(encoding="utf-8") as f:
         for r in csv.DictReader(f):
             add(r.get("IP") or r.get("ip") or "", r.get("平均延迟(ms)") or r.get("latency_ms") or "999", r.get("下载速度(MB/s)") or r.get("download_speed_MB_s") or "0", "best")
+
+if not items:
+    path = base / "ip.txt"
+    if path.exists():
+        with path.open(encoding="utf-8") as f:
+            for line in f:
+                raw = line.strip()
+                if not raw or raw.startswith("#"):
+                    continue
+                try:
+                    net = ipaddress.ip_network(raw, strict=False)
+                except ValueError:
+                    add(raw, 999, 0, "ip_seed")
+                    continue
+                if net.version != 4 or net.num_addresses <= 2:
+                    continue
+                usable = net.num_addresses - 2
+                offsets = [1, max(1, usable // 8), max(1, usable // 4), max(1, usable // 2), max(1, usable * 3 // 4), max(1, usable * 7 // 8), usable]
+                for offset in offsets:
+                    try:
+                        ip = str(net.network_address + offset)
+                    except Exception:
+                        continue
+                    add(ip, 999, 0, "ip_seed")
 
 ranked = sorted(items.items(), key=lambda kv: (-kv[1][2], kv[1][0]))
 for ip, (lat, speed, score, source) in ranked[:limit]:
@@ -366,6 +390,7 @@ def run_one(idx):
         "-w", "%{http_code},%{size_download},%{time_total},%{speed_download}",
         url,
     ]
+    cmd[-2] = "%{http_code},%{size_download},%{time_total},%{speed_download},%{time_connect},%{time_appconnect}"
     proc = subprocess.run(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     parts = (proc.stdout or "0,0,0,0").split(",")
     try:
@@ -373,10 +398,12 @@ def run_one(idx):
         size = int(float(parts[1] or 0))
         total = float(parts[2] or 0)
         bps = float(parts[3] or 0)
+        connect = float(parts[4] or 0) if len(parts) > 4 else 0.0
+        appconnect = float(parts[5] or 0) if len(parts) > 5 else 0.0
     except Exception:
-        http, size, total, bps = 0, 0, 0.0, 0.0
+        http, size, total, bps, connect, appconnect = 0, 0, 0.0, 0.0, 0.0, 0.0
     err = (proc.stderr or "").strip().replace(",", ";").replace("\n", " ")[:120]
-    return http, size, total, bps, err
+    return http, size, total, bps, connect, appconnect, err
 
 wall_start = time.monotonic()
 with concurrent.futures.ThreadPoolExecutor(max_workers=parallel) as executor:
@@ -385,6 +412,11 @@ elapsed = max(time.monotonic() - wall_start, 0.001)
 ok_rows = [r for r in rows if r[0] in (200, 206) and r[1] > 0]
 total_bytes = sum(r[1] for r in ok_rows)
 speed = total_bytes / elapsed / 1024 / 1024
+connect_samples = [r[4] for r in ok_rows if r[4] > 0] or [r[4] for r in rows if r[4] > 0]
+try:
+    measured_latency = min(connect_samples) * 1000 if connect_samples else float(latency)
+except Exception:
+    measured_latency = 999.0
 codes = {}
 for r in rows:
     codes[r[0]] = codes.get(r[0], 0) + 1
@@ -392,8 +424,8 @@ http = 200 if ok_rows else (max(codes, key=codes.get) if codes else 0)
 sample_url = f"https://{host}/__down?bytes={download_bytes}&op={op}&round={round_id}&parallel={parallel}"
 error = f"parallel={parallel} ok={len(ok_rows)} codes={codes}"
 with open(diag, "a", encoding="utf-8", newline="") as f:
-    csv.writer(f).writerow([op, round_id, ip, latency, source, sample_url, http, total_bytes, f"{elapsed:.3f}", f"{speed:.2f}", error])
-print(f"round={round_id} ip={ip} latency={latency} old_speed={old_speed} source={source} http={http} bytes={total_bytes} speed={speed:.2f}MB/s {error}")
+    csv.writer(f).writerow([op, round_id, ip, f"{measured_latency:.2f}", source, sample_url, http, total_bytes, f"{elapsed:.3f}", f"{speed:.2f}", error])
+print(f"round={round_id} ip={ip} latency={measured_latency:.2f} old_speed={old_speed} source={source} http={http} bytes={total_bytes} speed={speed:.2f}MB/s {error}")
 PY
     sleep "$PER_REQUEST_SLEEP"
   done < "$candidate_file"
