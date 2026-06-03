@@ -301,6 +301,8 @@ def add(ip, lat, speed=0.0, source="", order=0):
     if speed >= sla_speed:
         score += 5000
     score += max(0, 1000 - lat * 10) + speed * 20
+    if source == "history" and not (lat <= sla_latency and speed >= sla_speed):
+        score -= 2500
     if source == "ip_seed":
         score += seed_bias(ip) - order * 0.001
     if old is None or score > old[2]:
@@ -326,7 +328,8 @@ if path.exists():
         for r in csv.DictReader(f):
             add(r.get("IP") or r.get("ip") or "", r.get("平均延迟(ms)") or r.get("latency_ms") or "999", r.get("下载速度(MB/s)") or r.get("download_speed_MB_s") or "0", "best")
 
-if not items:
+sla_ready = sum(1 for lat, speed, score, source in items.values() if lat <= sla_latency and speed >= sla_speed)
+if sla_ready < limit:
     path = base / "ip.txt"
     if path.exists():
         with path.open(encoding="utf-8") as f:
@@ -343,7 +346,7 @@ if not items:
                 if net.version != 4 or net.num_addresses <= 2:
                     continue
                 usable = net.num_addresses - 2
-                offsets = [1, max(1, usable // 8), max(1, usable // 4), max(1, usable // 2), max(1, usable * 3 // 4), max(1, usable * 7 // 8), usable]
+                offsets = [1, max(1, usable // 8), max(1, usable // 4), max(1, usable // 2), max(1, usable // 3), max(1, usable // 2), max(1, usable * 2 // 3), max(1, usable * 3 // 4), max(1, usable * 7 // 8), usable]
                 for offset in offsets:
                     try:
                         ip = str(net.network_address + offset)
