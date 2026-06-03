@@ -191,8 +191,8 @@ summary.write_text("\n".join([
     f"candidate_count={len(candidate_chosen)}",
     f"sla_status={status}",
     f"target_speed_MB_s={target_speed:g}",
-    f"best_latency_ms={best_latency:.2f}" if chosen else "best_latency_ms=N/A",
-    f"best_speed_MB_s={best_speed:.2f}" if chosen else "best_speed_MB_s=N/A",
+    f"best_latency_ms={best_latency:.2f}" if candidate_chosen else "best_latency_ms=N/A",
+    f"best_speed_MB_s={best_speed:.2f}" if candidate_chosen else "best_speed_MB_s=N/A",
     "published_files=best.csv,best.txt" if published else "published_files=not_updated; candidate_best.csv,candidate_best.txt only",
     "verdict=" + (
         f"v4 已发布 {required} 个 SLA 达标 IP（延迟 <= {sla_latency:g}ms，速度 >= {sla_speed:g} MB/s）。"
@@ -200,7 +200,7 @@ summary.write_text("\n".join([
         f"v4 当前只有 {len(chosen)}/{required} 个 SLA 达标 IP；已保留 {len(candidate_chosen)} 个本机候选供 Worker 统一裁决。"
     ),
 ]) + "\n", encoding="utf-8")
-print(f"sla_good_count={len(chosen)} published={int(published)}")
+print(f"sla_good_count={len(chosen)} candidate_count={len(candidate_chosen)} published={int(published)}")
 PY
 }
 
@@ -687,6 +687,11 @@ run_cfst_replenish() {
     echo "round=${round} publish_check: ${publish_result}"
     if echo "$publish_result" | grep -q "published=1"; then
       echo "SLA satisfied in round ${round}"
+      break
+    fi
+    candidate_count="$(printf '%s' "$publish_result" | sed -n 's/.*candidate_count=\([0-9][0-9]*\).*/\1/p')"
+    if [[ "${candidate_count:-0}" -ge "$REQUIRED_COUNT" ]]; then
+      echo "candidate pool ready in round ${round}; worker-side ranking will decide final Top IPs."
       break
     fi
 
