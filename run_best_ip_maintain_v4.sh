@@ -270,8 +270,20 @@ sla_speed = float(sys.argv[3])
 limit = int(sys.argv[4])
 base = pathlib.Path(".")
 items = {}
+seed_order = 0
 
-def add(ip, lat, speed=0.0, source=""):
+def seed_bias(ip):
+    if ip.startswith("104."):
+        return 7000
+    if ip.startswith("172.64.") or ip.startswith("172.65.") or ip.startswith("172.66.") or ip.startswith("172.67."):
+        return 6500
+    if ip.startswith("162.158."):
+        return 4500
+    if ip.startswith("198.41."):
+        return 3500
+    return 0
+
+def add(ip, lat, speed=0.0, source="", order=0):
     if not ip or not ip.replace(".", "").isdigit():
         return
     try:
@@ -289,6 +301,8 @@ def add(ip, lat, speed=0.0, source=""):
     if speed >= sla_speed:
         score += 5000
     score += max(0, 1000 - lat * 10) + speed * 20
+    if source == "ip_seed":
+        score += seed_bias(ip) - order * 0.001
     if old is None or score > old[2]:
         items[ip] = (lat, speed, score, source)
 
@@ -323,7 +337,8 @@ if not items:
                 try:
                     net = ipaddress.ip_network(raw, strict=False)
                 except ValueError:
-                    add(raw, 999, 0, "ip_seed")
+                    seed_order += 1
+                    add(raw, 999, 0, "ip_seed", seed_order)
                     continue
                 if net.version != 4 or net.num_addresses <= 2:
                     continue
@@ -334,7 +349,8 @@ if not items:
                         ip = str(net.network_address + offset)
                     except Exception:
                         continue
-                    add(ip, 999, 0, "ip_seed")
+                    seed_order += 1
+                    add(ip, 999, 0, "ip_seed", seed_order)
 
 ranked = sorted(items.items(), key=lambda kv: (-kv[1][2], kv[1][0]))
 for ip, (lat, speed, score, source) in ranked[:limit]:
