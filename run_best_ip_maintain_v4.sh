@@ -88,6 +88,7 @@ summary = base / "scan_summary.txt"
 
 fields = ["operator_profile","ip","latency_ms","download_speed_MB_s","packet_loss","colo","hit_level","speed_source","url","http_code","bytes_downloaded","score","last_seen"]
 rows = []
+candidate_rows = []
 if history.exists():
     with history.open(encoding="utf-8") as f:
         for r in csv.DictReader(f):
@@ -98,13 +99,17 @@ if history.exists():
                 speed = float(r.get("download_speed_MB_s", "0") or 0)
             except ValueError:
                 continue
-            if r.get("operator_profile") == op and lat <= sla_latency and speed >= sla_speed:
+            if r.get("operator_profile") == op and speed > 0:
                 r["_lat"] = lat
                 r["_speed"] = speed
-                rows.append(r)
+                candidate_rows.append(r)
+                if lat <= sla_latency and speed >= sla_speed:
+                    rows.append(r)
 
 rows.sort(key=lambda r: (r["_speed"], -r["_lat"]), reverse=True)
+candidate_rows.sort(key=lambda r: (r["_speed"], -r["_lat"]), reverse=True)
 chosen = rows[:required]
+candidate_chosen = candidate_rows[:max(required, 10)]
 
 def write_table(path, selected):
     tmp = path.with_suffix(path.suffix + ".tmp")
@@ -141,8 +146,8 @@ def write_txt(path, selected):
             f.write(r.get("ip", "") + "\n")
     os.replace(tmp, path)
 
-write_table(candidate_csv, chosen)
-write_txt(candidate_txt, chosen)
+write_table(candidate_csv, candidate_chosen)
+write_txt(candidate_txt, candidate_chosen)
 
 published = False
 if len(chosen) >= required:
@@ -150,8 +155,8 @@ if len(chosen) >= required:
     write_txt(best_txt, chosen)
     published = True
 
-best_latency = min((r["_lat"] for r in chosen), default=math.nan)
-best_speed = max((r["_speed"] for r in chosen), default=math.nan)
+best_latency = min((r["_lat"] for r in candidate_chosen), default=math.nan)
+best_speed = max((r["_speed"] for r in candidate_chosen), default=math.nan)
 status = "pass" if published else "fail"
 summary.write_text("\n".join([
     f"scan_finished_at={time.strftime('%Y-%m-%d %H:%M:%S')}",
@@ -162,6 +167,7 @@ summary.write_text("\n".join([
     f"required_count={required}",
     f"sla_good_count={len(chosen)}",
     f"best_count={len(chosen)}",
+    f"candidate_count={len(candidate_chosen)}",
     f"sla_status={status}",
     f"target_speed_MB_s={target_speed:g}",
     f"best_latency_ms={best_latency:.2f}" if chosen else "best_latency_ms=N/A",
@@ -170,7 +176,7 @@ summary.write_text("\n".join([
     "verdict=" + (
         f"v4 已发布 {required} 个 SLA 达标 IP（延迟 <= {sla_latency:g}ms，速度 >= {sla_speed:g} MB/s）。"
         if published else
-        f"v4 当前只有 {len(chosen)}/{required} 个 SLA 达标 IP；正式 best.csv/best.txt 暂不伪装成功。"
+        f"v4 当前只有 {len(chosen)}/{required} 个 SLA 达标 IP；已保留 {len(candidate_chosen)} 个本机候选供 Worker 统一裁决。"
     ),
 ]) + "\n", encoding="utf-8")
 print(f"sla_good_count={len(chosen)} published={int(published)}")
