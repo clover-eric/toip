@@ -27,10 +27,10 @@ MAX_CANDIDATES="${MAX_CANDIDATES:-48}"
 AGGRESSIVE_SCAN="${AGGRESSIVE_SCAN:-1}"
 CANDIDATE_NEIGHBORS="${CANDIDATE_NEIGHBORS:-1}"
 QUICK_PROBE="${QUICK_PROBE:-1}"
-QUICK_DOWNLOAD_BYTES="${QUICK_DOWNLOAD_BYTES:-800000}"
-QUICK_PARALLEL_DOWNLOADS="${QUICK_PARALLEL_DOWNLOADS:-4}"
-QUICK_CURL_TIME_LIMIT="${QUICK_CURL_TIME_LIMIT:-6}"
-FULL_CANDIDATES="${FULL_CANDIDATES:-16}"
+QUICK_DOWNLOAD_BYTES="${QUICK_DOWNLOAD_BYTES:-2000000}"
+QUICK_PARALLEL_DOWNLOADS="${QUICK_PARALLEL_DOWNLOADS:-8}"
+QUICK_CURL_TIME_LIMIT="${QUICK_CURL_TIME_LIMIT:-8}"
+FULL_CANDIDATES="${FULL_CANDIDATES:-20}"
 CURL_TIME_LIMIT="${CURL_TIME_LIMIT:-12}"
 CONNECT_TIMEOUT="${CONNECT_TIMEOUT:-6}"
 PER_REQUEST_SLEEP="${PER_REQUEST_SLEEP:-3}"
@@ -51,9 +51,6 @@ case "$OPERATOR" in
 esac
 if [[ "$AGGRESSIVE_SCAN" == "1" && "$MAX_CANDIDATES" -lt 48 ]]; then
   MAX_CANDIDATES=48
-fi
-if [[ "$FORCE_PARALLEL" != "1" && "$OPERATOR" == "CMCC" && "$PARALLEL_DOWNLOADS" -gt 12 ]]; then
-  PARALLEL_DOWNLOADS=12
 fi
 
 if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
@@ -583,11 +580,14 @@ try:
                 bytes_downloaded = int(float(r.get("bytes_downloaded") or 0))
                 speed = float(r.get("speed_MB_s") or 0)
                 lat = float(r.get("latency_ms") or 999)
+                error = r.get("error") or ""
             except Exception:
                 continue
             if http not in (200, 206) or bytes_downloaded <= 0 or speed <= 0:
                 continue
-            score = speed * 1000 - lat * 8
+            ok_match = __import__("re").search(r"ok=(\d+)", error)
+            ok_count = int(ok_match.group(1)) if ok_match else 0
+            score = ok_count * 1200 + speed * 180 - lat * 6
             rows.append((score, lat, speed, r))
 except FileNotFoundError:
     pass
