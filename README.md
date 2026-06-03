@@ -8,10 +8,22 @@ Cloudflare 优选 IP 本地检测端。适配 OpenWrt、软路由、NAS、Linux�
 curl -fsSL https://raw.githubusercontent.com/clover-eric/toip/main/install.sh | sh
 ```
 
+国内网络优先用加速入口：
+
+```sh
+curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/clover-eric/toip/main/install.sh | sh
+```
+
 指定检测点运营商：
 
 ```sh
 SOURCE=local-cmcc OPERATOR=CMCC sh -c "$(curl -fsSL https://raw.githubusercontent.com/clover-eric/toip/main/install.sh)"
+```
+
+国内网络指定运营商：
+
+```sh
+SOURCE=local-cmcc OPERATOR=CMCC sh -c "$(curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/clover-eric/toip/main/install.sh)"
 ```
 
 默认已经内置：
@@ -20,6 +32,8 @@ SOURCE=local-cmcc OPERATOR=CMCC sh -c "$(curl -fsSL https://raw.githubuserconten
 WORKER_URL=https://cfip.i3.pub
 UPLOAD_TOKEN=ChangeMeUpload2026!
 ```
+
+安装脚本内部会自动尝试 `gh-proxy.com`、`ghfast.top` 和 GitHub 直连，源码包和 `cfst` 下载都会自动切换可用源。
 
 ## Docker
 

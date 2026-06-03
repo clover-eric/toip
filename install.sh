@@ -10,6 +10,28 @@ SERVICE_NAME="toip-agent"
 log() { printf '%s\n' "toip: $*"; }
 need() { command -v "$1" >/dev/null 2>&1; }
 
+fetch_url() {
+  output="$1"
+  shift
+  for url in "$@"; do
+    [ -n "$url" ] || continue
+    log "fetch $url"
+    if need curl; then
+      if curl -L --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 -fsS "$url" -o "$output"; then
+        return 0
+      fi
+    elif need wget; then
+      if wget -T 120 -O "$output" "$url"; then
+        return 0
+      fi
+    else
+      log "need curl or wget"
+      return 1
+    fi
+  done
+  return 1
+}
+
 detect_os() {
   case "$(uname -s 2>/dev/null || echo unknown)" in
     Linux) echo linux ;;
@@ -125,11 +147,11 @@ download_cfst() {
   url="https://github.com/XIU2/CloudflareSpeedTest/releases/download/v${CFST_VERSION}/cfst_${cfst_arch}.tar.gz"
   tmp="/tmp/toip-cfst.tar.gz"
   log "download cfst $cfst_arch"
-  if need curl; then
-    curl -fsSL "$url" -o "$tmp"
-  else
-    wget -O "$tmp" "$url"
-  fi
+  fetch_url "$tmp" \
+    "${CFST_TARBALL_URL:-}" \
+    "https://gh-proxy.com/${url}" \
+    "https://ghfast.top/${url}" \
+    "$url"
   as_root tar -xzf "$tmp" -C "$INSTALL_DIR" cfst
   as_root chmod +x "$INSTALL_DIR/cfst"
   rm -f "$tmp"
@@ -223,11 +245,12 @@ main() {
     mkdir -p "$tmp_dir"
     tarball="$tmp_dir/toip.tar.gz"
     log "download installer package"
-    if need curl; then
-      curl -fsSL "${TOIP_TARBALL_URL:-https://github.com/clover-eric/toip/archive/refs/heads/main.tar.gz}" -o "$tarball"
-    else
-      wget -O "$tarball" "${TOIP_TARBALL_URL:-https://github.com/clover-eric/toip/archive/refs/heads/main.tar.gz}"
-    fi
+    origin_tarball="https://github.com/clover-eric/toip/archive/refs/heads/main.tar.gz"
+    fetch_url "$tarball" \
+      "${TOIP_TARBALL_URL:-}" \
+      "https://gh-proxy.com/${origin_tarball}" \
+      "https://ghfast.top/${origin_tarball}" \
+      "$origin_tarball"
     tar -xzf "$tarball" -C "$tmp_dir" --strip-components=1
     cd "$tmp_dir"
   fi
