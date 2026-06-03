@@ -16,8 +16,11 @@ CFST_LOG="cfst_replenish_v4.log"
 CFST_OUT="result_scan_v4.csv"
 REMOTE_BEST_TXT="remote_best.txt"
 CF_IPV4_TXT="cf_ipv4.txt"
+ROUTE_ENV="detected_route.env"
 
 OPERATOR="${OPERATOR:-CMCC}"
+SOURCE="${SOURCE:-$(hostname 2>/dev/null || echo router)}"
+AUTO_OPERATOR="${AUTO_OPERATOR:-1}"
 SLA_SPEED_MB="${SLA_SPEED_MB:-20}"
 SLA_LATENCY_MS="${SLA_LATENCY_MS:-30}"
 REQUIRED_COUNT="${REQUIRED_COUNT:-10}"
@@ -44,6 +47,45 @@ CFST_TESTS="${CFST_TESTS:-4}"
 CFST_DOWNLOADS="${CFST_DOWNLOADS:-20}"
 WORKER_URL="${WORKER_URL:-https://cfip.i3.pub}"
 FORCE_PARALLEL="${FORCE_PARALLEL:-0}"
+
+detect_operator_route() {
+  [[ "$AUTO_OPERATOR" == "1" ]] || return 0
+  local body op ip asn org
+  body="$(curl -fsSL --connect-timeout 4 --max-time 8 https://ipapi.co/json/ 2>/dev/null || true)"
+  if [[ -z "$body" ]]; then
+    body="$(curl -fsSL --connect-timeout 4 --max-time 8 https://ipinfo.io/json 2>/dev/null || true)"
+  fi
+  if [[ -n "$body" ]]; then
+    ip="$(printf '%s' "$body" | sed -n 's/.*"ip"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
+    asn="$(printf '%s' "$body" | sed -n 's/.*"asn"[[:space:]]*:[[:space:]]*"\{0,1\}\([^",}]*\).*/\1/p' | head -n1)"
+    org="$(printf '%s' "$body" | sed -n 's/.*"org"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
+    [[ -n "$org" ]] || org="$(printf '%s' "$body" | sed -n 's/.*"as"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
+    local text
+    text="$(printf '%s %s' "$asn" "$org" | tr 'A-Z' 'a-z')"
+    case "$text" in
+      *4134*|*4809*|*4811*|*4812*|*4815*|*chinanet*|*telecom*|*cn2*|*ctcc*|*电信*) op="CTCC" ;;
+      *4837*|*4814*|*9929*|*17623*|*17816*|*unicom*|*china169*|*cucc*|*联通*) op="CUCC" ;;
+      *9808*|*24400*|*56040*|*56041*|*56044*|*mobile*|*cmcc*|*cmnet*|*cmi*|*移动*) op="CMCC" ;;
+      *) op="" ;;
+    esac
+  fi
+  if [[ -n "${op:-}" ]]; then
+    OPERATOR="$op"
+  fi
+  SOURCE_BASE="${SOURCE_BASE:-${SOURCE%-cmcc}}"
+  SOURCE_BASE="${SOURCE_BASE%-ctcc}"
+  SOURCE_BASE="${SOURCE_BASE%-cucc}"
+  SOURCE="${SOURCE_BASE}-$(printf '%s' "$OPERATOR" | tr 'A-Z' 'a-z')"
+  {
+    echo "OPERATOR=$OPERATOR"
+    echo "SOURCE=$SOURCE"
+    echo "ROUTE_IP=${ip:-}"
+    echo "ROUTE_ASN=${asn:-}"
+    echo "ROUTE_ORG=${org:-}"
+  } > "$ROUTE_ENV"
+}
+
+detect_operator_route
 
 case "$OPERATOR" in
   CMCC|CTCC|CUCC) ;;
@@ -614,6 +656,7 @@ run_cfst_replenish() {
 {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] v4 SLA maintainer started"
   echo "operator=${OPERATOR} sla_latency_ms=${SLA_LATENCY_MS} sla_speed_MB_s=${SLA_SPEED_MB} required=${REQUIRED_COUNT} max_rounds=${MAX_ROUNDS} max_candidates=${MAX_CANDIDATES} aggressive=${AGGRESSIVE_SCAN} neighbors=${CANDIDATE_NEIGHBORS} quick=${QUICK_PROBE} quick_parallel=${QUICK_PARALLEL_DOWNLOADS} full_candidates=${FULL_CANDIDATES} parallel_downloads=${PARALLEL_DOWNLOADS} health_check=${HEALTH_CHECK}"
+  [[ -f "$ROUTE_ENV" ]] && sed 's/^/route_/' "$ROUTE_ENV"
   [[ -n "${CAFFEINATE_PID:-}" ]] && echo "caffeinate_pid=${CAFFEINATE_PID}"
   sync_remote_best
   sync_cf_ipv4

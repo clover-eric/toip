@@ -4,6 +4,10 @@ set -euo pipefail
 worker_url="${WORKER_URL:-}"
 upload_token="${UPLOAD_TOKEN:-}"
 source_name="${SOURCE:-$(hostname 2>/dev/null || echo unknown)}"
+if [[ -f detected_route.env ]]; then
+  route_source="$(sed -n 's/^SOURCE=//p' detected_route.env | head -n1)"
+  [[ -n "$route_source" ]] && source_name="$route_source"
+fi
 source_safe="$(printf '%s' "$source_name" | sed 's/[^A-Za-z0-9_.-]/_/g')"
 
 if [[ -z "$worker_url" ]]; then
