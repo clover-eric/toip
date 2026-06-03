@@ -15,6 +15,7 @@ SUMMARY_FILE="scan_summary.txt"
 CFST_LOG="cfst_replenish_v4.log"
 CFST_OUT="result_scan_v4.csv"
 REMOTE_BEST_TXT="remote_best.txt"
+CF_IPV4_TXT="cf_ipv4.txt"
 
 OPERATOR="${OPERATOR:-CMCC}"
 SLA_SPEED_MB="${SLA_SPEED_MB:-20}"
@@ -22,7 +23,9 @@ SLA_LATENCY_MS="${SLA_LATENCY_MS:-30}"
 REQUIRED_COUNT="${REQUIRED_COUNT:-10}"
 TARGET_SPEED_MB="${TARGET_SPEED_MB:-80}"
 MAX_ROUNDS="${MAX_ROUNDS:-5}"
-MAX_CANDIDATES="${MAX_CANDIDATES:-24}"
+MAX_CANDIDATES="${MAX_CANDIDATES:-48}"
+AGGRESSIVE_SCAN="${AGGRESSIVE_SCAN:-1}"
+CANDIDATE_NEIGHBORS="${CANDIDATE_NEIGHBORS:-1}"
 CURL_TIME_LIMIT="${CURL_TIME_LIMIT:-12}"
 CONNECT_TIMEOUT="${CONNECT_TIMEOUT:-6}"
 PER_REQUEST_SLEEP="${PER_REQUEST_SLEEP:-3}"
@@ -40,6 +43,9 @@ case "$OPERATOR" in
   CMCC|CTCC|CUCC) ;;
   *) OPERATOR="CMCC" ;;
 esac
+if [[ "$AGGRESSIVE_SCAN" == "1" && "$MAX_CANDIDATES" -lt 48 ]]; then
+  MAX_CANDIDATES=48
+fi
 
 if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
   echo "v4 already running: pid=$(cat "$PID_FILE")"
@@ -66,6 +72,15 @@ sync_remote_best() {
     mv "${REMOTE_BEST_TXT}.tmp" "$REMOTE_BEST_TXT"
   else
     rm -f "${REMOTE_BEST_TXT}.tmp"
+  fi
+}
+
+sync_cf_ipv4() {
+  curl -fsSL --connect-timeout 5 --max-time 12 "https://www.cloudflare.com/ips-v4" -o "${CF_IPV4_TXT}.tmp" 2>/dev/null || return 0
+  if [[ -s "${CF_IPV4_TXT}.tmp" ]]; then
+    mv "${CF_IPV4_TXT}.tmp" "$CF_IPV4_TXT"
+  else
+    rm -f "${CF_IPV4_TXT}.tmp"
   fi
 }
 
@@ -279,22 +294,24 @@ PY
 }
 
 make_candidates() {
-  python3 - "$OPERATOR" "$SLA_LATENCY_MS" "$SLA_SPEED_MB" "$MAX_CANDIDATES" > "$1" <<'PY'
+  python3 - "$OPERATOR" "$SLA_LATENCY_MS" "$SLA_SPEED_MB" "$MAX_CANDIDATES" "$AGGRESSIVE_SCAN" "$CANDIDATE_NEIGHBORS" > "$1" <<'PY'
 import csv, ipaddress, pathlib, sys
 
 op = sys.argv[1]
 sla_latency = float(sys.argv[2])
 sla_speed = float(sys.argv[3])
 limit = int(sys.argv[4])
+aggressive = sys.argv[5] == "1"
+neighbors_enabled = sys.argv[6] == "1"
 base = pathlib.Path(".")
 items = {}
 seed_order = 0
 
 def seed_bias(ip):
+    if ip.startswith("172.64.") or ip.startswith("172.65.") or ip.startswith("172.66.") or ip.startswith("172.67."):
+        return 7200
     if ip.startswith("104."):
         return 7000
-    if ip.startswith("172.64.") or ip.startswith("172.65.") or ip.startswith("172.66.") or ip.startswith("172.67."):
-        return 6500
     if ip.startswith("162.158."):
         return 4500
     if ip.startswith("198.41."):
@@ -323,10 +340,30 @@ def add(ip, lat, speed=0.0, source="", order=0):
         score -= 2500
     if source == "remote_best":
         score += 20000
+    if source == "remote_neighbor":
+        score += 12000 + seed_bias(ip) - order * 0.01
     if source == "ip_seed":
         score += seed_bias(ip) - order * 0.001
     if old is None or score > old[2]:
         items[ip] = (lat, speed, score, source)
+
+def add_neighbors(ip, source, base_order=0):
+    if not neighbors_enabled:
+        return
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return
+    if addr.version != 4:
+        return
+    last = int(str(addr).rsplit(".", 1)[1])
+    deltas = [-64, -32, -16, -8, -4, -2, -1, 1, 2, 4, 8, 16, 32, 64]
+    for i, delta in enumerate(deltas, start=1):
+        new_last = last + delta
+        if new_last < 2 or new_last > 253:
+            continue
+        neighbor = str(addr + delta)
+        add(neighbor, 999, 0, source, base_order + i)
 
 for name in ("result_scan.csv", "result_scan_v4.csv"):
     path = base / name
@@ -355,26 +392,40 @@ if path.exists():
             ip = line.strip()
             if ip and not ip.startswith("#"):
                 add(ip, 1, sla_speed + 1, "remote_best")
+                add_neighbors(ip, "remote_neighbor", seed_order)
 
 sla_ready = sum(1 for lat, speed, score, source in items.values() if lat <= sla_latency and speed >= sla_speed)
 if sla_ready < limit:
-    path = base / "ip.txt"
-    if path.exists():
-        with path.open(encoding="utf-8") as f:
-            for line in f:
-                raw = line.strip()
-                if not raw or raw.startswith("#"):
-                    continue
-                try:
-                    net = ipaddress.ip_network(raw, strict=False)
-                except ValueError:
-                    seed_order += 1
-                    add(raw, 999, 0, "ip_seed", seed_order)
-                    continue
-                if net.version != 4 or net.num_addresses <= 2:
-                    continue
-                usable = net.num_addresses - 2
+    paths = []
+    if aggressive:
+        paths.append(base / "cf_ipv4.txt")
+    paths.append(base / "ip.txt")
+    seen_nets = set()
+    for path in paths:
+        if path.exists():
+            with path.open(encoding="utf-8") as f:
+                lines = list(f)
+        else:
+            lines = []
+        for line in lines:
+            raw = line.strip()
+            if not raw or raw.startswith("#"):
+                continue
+            if raw in seen_nets:
+                continue
+            seen_nets.add(raw)
+            try:
+                net = ipaddress.ip_network(raw, strict=False)
+            except ValueError:
+                seed_order += 1
+                add(raw, 999, 0, "ip_seed", seed_order)
+                continue
+            if net.version != 4 or net.num_addresses <= 2:
+                continue
+            usable = net.num_addresses - 2
+            if aggressive:
                 offsets = [
+                    max(2, usable // 11),
                     max(2, usable // 7),
                     max(2, usable // 5),
                     max(2, usable // 3),
@@ -382,17 +433,26 @@ if sla_ready < limit:
                     max(2, usable * 2 // 3),
                     max(2, usable * 4 // 5),
                     max(2, usable * 6 // 7),
+                    max(2, usable * 10 // 11),
                 ]
-                for offset in offsets:
-                    try:
-                        ip = str(net.network_address + offset)
-                    except Exception:
-                        continue
-                    last_octet = int(ip.rsplit(".", 1)[1])
-                    if last_octet < 2 or last_octet > 253:
-                        continue
-                    seed_order += 1
-                    add(ip, 999, 0, "ip_seed", seed_order)
+            else:
+                offsets = [
+                    max(2, usable // 5),
+                    max(2, usable // 3),
+                    max(2, usable // 2),
+                    max(2, usable * 2 // 3),
+                    max(2, usable * 4 // 5),
+                ]
+            for offset in offsets:
+                try:
+                    ip = str(net.network_address + offset)
+                except Exception:
+                    continue
+                last_octet = int(ip.rsplit(".", 1)[1])
+                if last_octet < 2 or last_octet > 253:
+                    continue
+                seed_order += 1
+                add(ip, 999, 0, "ip_seed", seed_order)
 
 ranked = sorted(items.items(), key=lambda kv: (-kv[1][2], kv[1][0]))
 for ip, (lat, speed, score, source) in ranked[:limit]:
@@ -504,10 +564,12 @@ run_cfst_replenish() {
 
 {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] v4 SLA maintainer started"
-  echo "operator=${OPERATOR} sla_latency_ms=${SLA_LATENCY_MS} sla_speed_MB_s=${SLA_SPEED_MB} required=${REQUIRED_COUNT} max_rounds=${MAX_ROUNDS} parallel_downloads=${PARALLEL_DOWNLOADS} health_check=${HEALTH_CHECK}"
+  echo "operator=${OPERATOR} sla_latency_ms=${SLA_LATENCY_MS} sla_speed_MB_s=${SLA_SPEED_MB} required=${REQUIRED_COUNT} max_rounds=${MAX_ROUNDS} max_candidates=${MAX_CANDIDATES} aggressive=${AGGRESSIVE_SCAN} neighbors=${CANDIDATE_NEIGHBORS} parallel_downloads=${PARALLEL_DOWNLOADS} health_check=${HEALTH_CHECK}"
   [[ -n "${CAFFEINATE_PID:-}" ]] && echo "caffeinate_pid=${CAFFEINATE_PID}"
   sync_remote_best
+  sync_cf_ipv4
   [[ -f "$REMOTE_BEST_TXT" ]] && echo "remote_best_count=$(grep -cve '^[[:space:]]*$' "$REMOTE_BEST_TXT" 2>/dev/null || echo 0)"
+  [[ -f "$CF_IPV4_TXT" ]] && echo "cf_ipv4_count=$(grep -cve '^[[:space:]]*$' "$CF_IPV4_TXT" 2>/dev/null || echo 0)"
   echo "operator_profile,round,ip,latency_ms,candidate_source,url,http_code,bytes_downloaded,time_total,speed_MB_s,error" > "$DIAG_FILE"
   [[ -f "$HISTORY_FILE" ]] || echo "operator_profile,ip,latency_ms,download_speed_MB_s,packet_loss,colo,hit_level,speed_source,url,http_code,bytes_downloaded,score,last_seen" > "$HISTORY_FILE"
 
