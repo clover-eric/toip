@@ -4,7 +4,12 @@ cd "$(dirname "$0")"
 PID_FILE="scan_v4.pid"
 if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
   echo "status=running"
-  ps -p "$(cat "$PID_FILE")" -o pid,etime,state,%cpu,%mem,command
+  pid="$(cat "$PID_FILE")"
+  if ps -p "$pid" -o pid,etime,state,%cpu,%mem,command >/dev/null 2>&1; then
+    ps -p "$pid" -o pid,etime,state,%cpu,%mem,command
+  else
+    ps w | awk -v pid="$pid" '$1 == pid {print}'
+  fi
 else
   echo "status=not_running"
 fi
